@@ -10,6 +10,10 @@
 #include "bbport_overlay.h"
 #include "bloodborne_cam.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace Frontend {
 
 namespace {
@@ -18,6 +22,63 @@ namespace {
 // it rather than stacking. One expiry timestamp per direction, window-thread only.
 constexpr uint32_t kWheelPulseMs = 33;
 std::array<uint64_t, 4> g_wheel_expiry_ms{}; // index: WHEEL_UP=0, DOWN=1, LEFT=2, RIGHT=3
+
+#ifdef _WIN32
+// Whether an SDL display is the monitor with this GDI device name (\\.\DISPLAY2), the name the
+// Windows launcher lists. SDL's display bounds and MonitorFromPoint share this process's
+// coordinates, so the monitor under the display's centre is that display.
+bool HasDeviceName(SDL_DisplayID display, const char* device) {
+    SDL_Rect bounds{};
+    if (!SDL_GetDisplayBounds(display, &bounds)) {
+        return false;
+    }
+    const POINT centre{bounds.x + bounds.w / 2, bounds.y + bounds.h / 2};
+    const HMONITOR monitor = MonitorFromPoint(centre, MONITOR_DEFAULTTONULL);
+    MONITORINFOEXA info{};
+    info.cbSize = sizeof(info);
+    return monitor && GetMonitorInfoA(monitor, &info) && !SDL_strcasecmp(info.szDevice, device);
+}
+#endif
+
+bool DisplayMatches(SDL_DisplayID display, int index, const char* wanted) {
+    char* end = nullptr;
+    const long number = std::strtol(wanted, &end, 10);
+    if (end != wanted && *end == '\0') {
+        return number == index + 1;
+    }
+    const char* name = SDL_GetDisplayName(display);
+    if (name && !std::strcmp(name, wanted)) {
+        return true;
+    }
+#ifdef _WIN32
+    return HasDeviceName(display, wanted);
+#else
+    return false;
+#endif
+}
+
+// BB_DISPLAY (the launcher's Monitor setting): a Windows device name such as \\.\DISPLAY2, an
+// SDL display name, or a number counted from 1 in SDL's order (the primary display first).
+// 0 when it is unset or that display is not connected: SDL then uses the primary display.
+SDL_DisplayID ChosenDisplay() {
+    const char* wanted = std::getenv("BB_DISPLAY");
+    if (!wanted || !*wanted) {
+        return 0;
+    }
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    SDL_DisplayID chosen = 0;
+    for (int i = 0; displays && i < count && !chosen; ++i) {
+        if (DisplayMatches(displays[i], i, wanted)) {
+            chosen = displays[i];
+        }
+    }
+    SDL_free(displays);
+    if (!chosen) {
+        LOG_WARNING(Frontend, "Display {} is not connected: the window opens on the primary display", wanted);
+    }
+    return chosen;
+}
 } // namespace
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
@@ -27,8 +88,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     }
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED);
+    // Centred on the chosen display; a fullscreen window fills the display it is created on.
+    const SDL_DisplayID chosen = ChosenDisplay();
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(chosen));
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(chosen));
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width_);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
@@ -63,7 +126,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_GetWindowSizeInPixels(window, &w, &h);
     width = w;
     height = h;
-    LOG_INFO(Frontend, "Window {}x{} on {}", w, h, driver);
+    display = SDL_GetDisplayForWindow(window);
+    const char* display_name = SDL_GetDisplayName(display);
+    LOG_INFO(Frontend, "Window {}x{} on {}, display {}", w, h, driver, display_name ? display_name : "(unknown)");
     BbMouse::Start();
 }
 

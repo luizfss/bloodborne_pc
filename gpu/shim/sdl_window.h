@@ -39,6 +39,8 @@ public:
     s32 GetWidth() const { return width.load(std::memory_order_relaxed); }
     s32 GetHeight() const { return height.load(std::memory_order_relaxed); }
     SDL_Window* GetSDLWindow() const { return window; }
+    /// The SDL_DisplayID the window opened on (BB_DISPLAY, else the primary display); 0 if unknown.
+    u32 GetDisplay() const { return display; }
     WindowSystemInfo GetWindowInfo() const { return window_info; }
     bool IsOpen() const { return is_open.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
@@ -69,6 +71,7 @@ private:
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();
     SDL_Window* window{};
+    u32 display{}; // set once by the constructor, before the window is shared
     WindowSystemInfo window_info{};
 
     // Mouse capture and hotkeys (window thread only, except where noted): see MOU-002..008,

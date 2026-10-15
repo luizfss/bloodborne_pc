@@ -1223,6 +1223,53 @@ EXTRA_TRANSLATIONS = {
     },
 }
 
+# The Monitor setting (Display & FPS page): each language in the order of MONITOR_KEYS.
+MONITOR_KEYS = [
+    'Monitor', 'Primary monitor (Windows default)', '{} (not connected: the primary monitor is used)', 'primary',
+    'The game opens on this monitor; in fullscreen it fills it. Listed left to right, '
+    'as arranged in the Windows display settings.',
+]
+MONITOR_TRANSLATIONS = {
+    'ar': ['الشاشة', 'الشاشة الرئيسية (افتراضي ويندوز)', '{} (غير متصلة: تُستخدم الشاشة الرئيسية)', 'رئيسية',
+           'تُفتح اللعبة على هذه الشاشة، وفي وضع ملء الشاشة تملؤها بالكامل. الشاشات مرتبة من اليسار إلى اليمين '
+           'كما في إعدادات العرض في ويندوز.'],
+    'es': ['Monitor', 'Monitor principal (predeterminado de Windows)',
+           '{} (no conectado: se usa el monitor principal)', 'principal',
+           'El juego se abre en este monitor; en pantalla completa lo ocupa entero. Aparecen de izquierda a '
+           'derecha, como en la configuración de pantalla de Windows.'],
+    'pt': ['Monitor', 'Monitor principal (padrão do Windows)', '{} (não conectado: o monitor principal é usado)',
+           'principal',
+           'O jogo abre neste monitor; em tela cheia, ocupa o monitor inteiro. Listados da esquerda para a '
+           'direita, como nas configurações de vídeo do Windows.'],
+    'fr': ['Écran', 'Écran principal (par défaut de Windows)', '{} (non connecté : l’écran principal est utilisé)',
+           'principal',
+           'Le jeu s’ouvre sur cet écran ; en plein écran, il l’occupe entièrement. Les écrans sont listés de '
+           'gauche à droite, comme dans les paramètres d’affichage de Windows.'],
+    'de': ['Monitor', 'Hauptmonitor (Windows-Standard)', '{} (nicht verbunden: der Hauptmonitor wird verwendet)',
+           'Hauptmonitor',
+           'Das Spiel öffnet sich auf diesem Monitor; im Vollbild füllt es ihn ganz aus. Von links nach rechts '
+           'aufgeführt, wie in den Windows-Anzeigeeinstellungen angeordnet.'],
+    'it': ['Monitor', 'Monitor principale (predefinito di Windows)',
+           '{} (non collegato: viene usato il monitor principale)', 'principale',
+           'Il gioco si apre su questo monitor; a schermo intero lo occupa tutto. Elencati da sinistra a destra, '
+           'come nelle impostazioni dello schermo di Windows.'],
+    'pl': ['Monitor', 'Monitor główny (domyślny w Windows)', '{} (niepodłączony: używany jest monitor główny)',
+           'główny',
+           'Gra otwiera się na tym monitorze; w trybie pełnoekranowym wypełnia go w całości. Monitory są '
+           'wymienione od lewej do prawej, tak jak w ustawieniach ekranu Windows.'],
+    'tr': ['Monitör', 'Ana monitör (Windows varsayılanı)', '{} (bağlı değil: ana monitör kullanılır)', 'ana',
+           'Oyun bu monitörde açılır; tam ekranda monitörün tamamını kaplar. Windows ekran ayarlarındaki '
+           'düzene göre soldan sağa sıralanır.'],
+    'zh': ['显示器', '主显示器（Windows 默认）', '{}（未连接：将使用主显示器）', '主显示器',
+           '游戏会在此显示器上打开；全屏时占满整个显示器。按 Windows 显示设置中的排列从左到右列出。'],
+    'ja': ['ディスプレイ', 'メインディスプレイ（Windows の既定）', '{}（未接続：メインディスプレイを使用）', 'メイン',
+           'ゲームはこのディスプレイで開きます。フルスクリーンではディスプレイ全体に表示されます。'
+           'Windows のディスプレイ設定の配置どおり、左から右の順に並びます。'],
+    'ko': ['디스플레이', '주 디스플레이 (Windows 기본값)', '{} (연결되지 않음: 주 디스플레이 사용)', '주 디스플레이',
+           '게임이 이 디스플레이에서 열리며, 전체 화면에서는 디스플레이 전체를 채웁니다. Windows 디스플레이 '
+           '설정의 배치대로 왼쪽에서 오른쪽 순서로 표시됩니다.'],
+}
+
 _tables = {}
 
 
@@ -1235,7 +1282,11 @@ def table(language):
         more = MORE.get(language)
         if more and len(more) != len(MORE_KEYS):
             raise ValueError(f'launcher translation {language}: {len(more)} texts for {len(MORE_KEYS)} new keys')
+        monitor = MONITOR_TRANSLATIONS.get(language)
+        if monitor and len(monitor) != len(MONITOR_KEYS):
+            raise ValueError(f'launcher translation {language}: {len(monitor)} texts for {len(MONITOR_KEYS)} monitor keys')
         _tables[language] = {**(dict(zip(KEYS, texts)) if texts else {}),
                              **(dict(zip(MORE_KEYS, more)) if more else {}),
+                             **(dict(zip(MONITOR_KEYS, monitor)) if monitor else {}),
                              **EXTRA_TRANSLATIONS.get(language, {})}
     return _tables[language]

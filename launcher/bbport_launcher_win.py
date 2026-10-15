@@ -12,6 +12,7 @@ game without the window (`--play`), run.py (`--run`) and the preparation scripts
 so a packaged port needs no Python installation.
 """
 import ctypes
+from ctypes import wintypes
 import json
 import os
 from pathlib import Path
@@ -200,7 +201,7 @@ INI_DEFAULTS = {'upscaler': 'fsr4', 'preset': '1', 'sharpen': '1', 'sharpness': 
 APP_DEFAULTS = {'ui_language': '', 'game_dir': str(PORT_DIR.parent / 'CUSA03173'), 'user_dir': '', 'dlc_dir': '',
                 'mods_dir': '', 'mods_enabled': True, 'patches_dir': '', 'language': '1',
                 'voice_language': 'auto',
-                'player_name': '', 'fullscreen': False, 'hdr': False, 'present_mode': 'Mailbox',
+                'player_name': '', 'monitor': '', 'fullscreen': False, 'hdr': False, 'present_mode': 'Mailbox',
                 'fps_mode': 'uncap', 'frame_cap': '', 'draw_pipe': '', 'readbacks': '',
                 'frames_ahead': '', 'frame_stats': False, 'gpu_profile': False,
                 'vk_validation': False, 'extra_env': '', 'close_on_play': False,
@@ -468,6 +469,8 @@ def game_environment(s):
     env['BB_VOICE_LANGUAGE'] = s['voice_language']
     if str(s['player_name']).strip():
         env['BB_USER_NAME'] = str(s['player_name']).strip()
+    if s.get('monitor'):
+        env['BB_DISPLAY'] = s['monitor']
     env['BB_FULLSCREEN'] = '1' if s['fullscreen'] else '0'
     env['BB_PRESENT_MODE'] = s['present_mode']
     if s['hdr']:
@@ -515,6 +518,164 @@ def game_environment(s):
     env['PYTHONUNBUFFERED'] = '1'
     env['PYTHONIOENCODING'] = 'utf-8'
     return env
+
+
+# ---------------------------------------------------------------------------------------------
+# Monitors. The Monitor setting is the GDI device name (\\.\DISPLAY2) the game gets as
+# BB_DISPLAY; gpu/shim/window.cpp finds the SDL display with that name and opens its window there.
+
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT), ('rcWork', wintypes.RECT),
+                ('dwFlags', wintypes.DWORD), ('szDevice', wintypes.WCHAR * 32)]
+
+
+class DEVMODEW(ctypes.Structure):
+    """The display side of DEVMODEW (its printer fields share the dmPosition union): 220 bytes."""
+    _fields_ = [('dmDeviceName', wintypes.WCHAR * 32), ('dmSpecVersion', wintypes.WORD),
+                ('dmDriverVersion', wintypes.WORD), ('dmSize', wintypes.WORD), ('dmDriverExtra', wintypes.WORD),
+                ('dmFields', wintypes.DWORD), ('dmPositionX', wintypes.LONG), ('dmPositionY', wintypes.LONG),
+                ('dmDisplayOrientation', wintypes.DWORD), ('dmDisplayFixedOutput', wintypes.DWORD),
+                ('dmColor', ctypes.c_short), ('dmDuplex', ctypes.c_short), ('dmYResolution', ctypes.c_short),
+                ('dmTTOption', ctypes.c_short), ('dmCollate', ctypes.c_short),
+                ('dmFormName', wintypes.WCHAR * 32), ('dmLogPixels', wintypes.WORD),
+                ('dmBitsPerPel', wintypes.DWORD), ('dmPelsWidth', wintypes.DWORD), ('dmPelsHeight', wintypes.DWORD),
+                ('dmDisplayFlags', wintypes.DWORD), ('dmDisplayFrequency', wintypes.DWORD),
+                ('dmICMMethod', wintypes.DWORD), ('dmICMIntent', wintypes.DWORD), ('dmMediaType', wintypes.DWORD),
+                ('dmDitherType', wintypes.DWORD), ('dmReserved1', wintypes.DWORD), ('dmReserved2', wintypes.DWORD),
+                ('dmPanningWidth', wintypes.DWORD), ('dmPanningHeight', wintypes.DWORD)]
+
+
+class LUID(ctypes.Structure):
+    _fields_ = [('LowPart', wintypes.DWORD), ('HighPart', wintypes.LONG)]
+
+
+class DISPLAYCONFIG_PATH_INFO(ctypes.Structure):
+    """Source and target info flattened (72 bytes); only the adapter ids and ids are read."""
+    _fields_ = [('sourceAdapterId', LUID), ('sourceId', ctypes.c_uint32), ('sourceModeInfoIdx', ctypes.c_uint32),
+                ('sourceStatusFlags', ctypes.c_uint32), ('targetAdapterId', LUID), ('targetId', ctypes.c_uint32),
+                ('targetModeInfoIdx', ctypes.c_uint32), ('outputTechnology', ctypes.c_uint32),
+                ('rotation', ctypes.c_uint32), ('scaling', ctypes.c_uint32), ('refreshNumerator', ctypes.c_uint32),
+                ('refreshDenominator', ctypes.c_uint32), ('scanLineOrdering', ctypes.c_uint32),
+                ('targetAvailable', wintypes.BOOL), ('targetStatusFlags', ctypes.c_uint32), ('flags', ctypes.c_uint32)]
+
+
+DISPLAYCONFIG_MODE_INFO = ctypes.c_uint64 * 8  # 64 bytes, never read
+
+
+class DISPLAYCONFIG_DEVICE_INFO_HEADER(ctypes.Structure):
+    _fields_ = [('type', ctypes.c_uint32), ('size', ctypes.c_uint32), ('adapterId', LUID), ('id', ctypes.c_uint32)]
+
+
+class DISPLAYCONFIG_SOURCE_DEVICE_NAME(ctypes.Structure):
+    _fields_ = [('header', DISPLAYCONFIG_DEVICE_INFO_HEADER), ('viewGdiDeviceName', wintypes.WCHAR * 32)]
+
+
+class DISPLAYCONFIG_TARGET_DEVICE_NAME(ctypes.Structure):
+    _fields_ = [('header', DISPLAYCONFIG_DEVICE_INFO_HEADER), ('flags', ctypes.c_uint32),
+                ('outputTechnology', ctypes.c_uint32), ('edidManufactureId', ctypes.c_uint16),
+                ('edidProductCodeId', ctypes.c_uint16), ('connectorInstance', ctypes.c_uint32),
+                ('monitorFriendlyDeviceName', wintypes.WCHAR * 64), ('monitorDevicePath', wintypes.WCHAR * 128)]
+
+
+def user32_api():
+    """A user32 of our own: argtypes set here must not change the shared ctypes.windll.user32."""
+    user32 = ctypes.WinDLL('user32')
+    user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.c_void_p, ctypes.c_void_p, wintypes.LPARAM]
+    user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFOEXW)]
+    user32.EnumDisplaySettingsW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(DEVMODEW)]
+    user32.GetDisplayConfigBufferSizes.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32),
+                                                   ctypes.POINTER(ctypes.c_uint32)]
+    user32.QueryDisplayConfig.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p,
+                                          ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p, ctypes.c_void_p]
+    user32.DisplayConfigGetDeviceInfo.argtypes = [ctypes.c_void_p]
+    for name in ('GetDisplayConfigBufferSizes', 'QueryDisplayConfig', 'DisplayConfigGetDeviceInfo'):
+        getattr(user32, name).restype = wintypes.LONG
+    return user32
+
+
+def monitor_names(user32):
+    """GDI device name (upper case) -> the monitor's own name (EDID), as Windows Settings shows it."""
+    only_active, insufficient_buffer = 0x2, 122
+    path_count, mode_count = ctypes.c_uint32(), ctypes.c_uint32()
+    for _attempt in range(3):  # the layout can change between the two calls
+        if user32.GetDisplayConfigBufferSizes(only_active, ctypes.byref(path_count), ctypes.byref(mode_count)):
+            return {}
+        paths = (DISPLAYCONFIG_PATH_INFO * path_count.value)()
+        modes = (DISPLAYCONFIG_MODE_INFO * mode_count.value)()
+        result = user32.QueryDisplayConfig(only_active, ctypes.byref(path_count), paths,
+                                           ctypes.byref(mode_count), modes, None)
+        if result != insufficient_buffer:
+            break
+    if result:
+        return {}
+    names = {}
+    for path in paths[:path_count.value]:
+        source = DISPLAYCONFIG_SOURCE_DEVICE_NAME()
+        source.header = DISPLAYCONFIG_DEVICE_INFO_HEADER(1, ctypes.sizeof(source), path.sourceAdapterId, path.sourceId)
+        target = DISPLAYCONFIG_TARGET_DEVICE_NAME()
+        target.header = DISPLAYCONFIG_DEVICE_INFO_HEADER(2, ctypes.sizeof(target), path.targetAdapterId, path.targetId)
+        if not user32.DisplayConfigGetDeviceInfo(ctypes.byref(source)) and \
+                not user32.DisplayConfigGetDeviceInfo(ctypes.byref(target)):
+            # A duplicated (cloned) desktop has one source for two monitors: the first names it.
+            names.setdefault(source.viewGdiDeviceName.upper(), target.monitorFriendlyDeviceName)
+    return names
+
+
+def list_monitors():
+    """The connected monitors, left to right as arranged in Windows: dicts with device, name,
+    width, height, hz and primary. [] where Windows cannot tell (and off Windows)."""
+    try:
+        user32 = user32_api()
+    except (AttributeError, OSError):
+        return []
+    found = []
+
+    def add(monitor, _dc, _rect, _data):
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(info)
+        if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            found.append(info)
+        return True
+    callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC, ctypes.c_void_p,
+                                  wintypes.LPARAM)(add)
+    if not user32.EnumDisplayMonitors(None, None, callback, 0):
+        return []
+    try:
+        names = monitor_names(user32)
+    except OSError:  # unnamed monitors are listed by their device name
+        names = {}
+    monitors = []
+    for info in sorted(found, key=lambda i: (i.rcMonitor.left, i.rcMonitor.top)):
+        mode = DEVMODEW()
+        mode.dmSize = ctypes.sizeof(mode)
+        # The real mode in pixels: rcMonitor is scaled for this system-DPI-aware launcher.
+        current = user32.EnumDisplaySettingsW(info.szDevice, 0xFFFFFFFF, ctypes.byref(mode))  # ENUM_CURRENT_SETTINGS
+        monitors.append({'device': info.szDevice, 'name': names.get(info.szDevice.upper(), ''),
+                         'width': mode.dmPelsWidth if current else 0, 'height': mode.dmPelsHeight if current else 0,
+                         'hz': mode.dmDisplayFrequency if current else 0, 'primary': bool(info.dwFlags & 1)})
+    return monitors
+
+
+def short_device(device):
+    """\\\\.\\DISPLAY2 -> DISPLAY2."""
+    return device.rsplit('\\', 1)[-1]
+
+
+def monitor_labels(monitors):
+    """What the Monitor list shows for each of list_monitors(): name, mode and the primary mark;
+    monitors that would read the same (two of one model) also get their device name."""
+    labels = []
+    for monitor in monitors:
+        label = monitor['name'] or short_device(monitor['device'])
+        if monitor['width'] and monitor['height']:
+            label += f" — {monitor['width']} × {monitor['height']}"
+            if monitor['hz'] > 1:  # 0 and 1 mean the hardware default
+                label += f", {monitor['hz']} Hz"
+        if monitor['primary']:
+            label += ' · ' + _('primary', 'основной')
+        labels.append(label)
+    return [f'{label} ({short_device(m["device"])})' if labels.count(label) > 1 else label
+            for label, m in zip(labels, monitors)]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -692,6 +853,33 @@ class Launcher:
         box.bind('<<ComboboxSelected>>', lambda _e: var.set(values[box.current()]))
         var.trace_add('write', show)
         return box
+
+    def monitor_choice(self, parent):
+        """The Monitor setting: the connected monitors, listed again by Refresh. A saved monitor
+        that is not connected now stays chosen (the game falls back to the primary one)."""
+        ttk = self.ttk
+        var = self.var('monitor', 'app')
+        holder = ttk.Frame(parent)
+        box = ttk.Combobox(holder, state='readonly', width=38)
+        box.pack(side='left')
+        devices = []
+
+        def fill():
+            monitors = list_monitors()
+            devices[:] = [''] + [monitor['device'] for monitor in monitors]
+            labels = [_('Primary monitor (Windows default)', 'Основной монитор (как в Windows)')]
+            labels += monitor_labels(monitors)
+            saved = var.get()
+            if saved not in devices:
+                devices.append(saved)
+                labels.append(_('{} (not connected: the primary monitor is used)',
+                                '{} (не подключён: используется основной монитор)').format(short_device(saved)))
+            box.configure(values=labels)
+            box.current(devices.index(saved))
+        fill()
+        box.bind('<<ComboboxSelected>>', lambda _e: var.set(devices[box.current()]))
+        ttk.Button(holder, text=_('Refresh', 'Обновить'), command=fill).pack(side='left', padx=(6, 0))
+        return holder
 
     def next_row(self, parent):
         return parent.grid_size()[1]
@@ -1004,6 +1192,11 @@ class Launcher:
                  _('1 keeps frame pacing even; more can raise FPS when the graphics card is the limit.',
                    '1 — ровная подача кадров; больше может поднять FPS, если упирается в видеокарту.'))
         self.section(f, _('Window', 'Окно'))
+        self.row(f, _('Monitor', 'Монитор'), self.monitor_choice(f),
+                 _('The game opens on this monitor; in fullscreen it fills it. Listed left to right, '
+                   'as arranged in the Windows display settings.',
+                   'Игра открывается на этом мониторе; в полноэкранном режиме занимает его целиком. '
+                   'Мониторы перечислены слева направо, как в настройках дисплея Windows.'))
         self.check(f, 'fullscreen', 'app', _('Fullscreen', 'Полноэкранный режим'))
         self.row(f, _('Presentation', 'Режим показа кадров'), self.choice(f, 'present_mode', 'app', PRESENT_MODES))
         self.check(f, 'hdr', 'app', _('Allow HDR output', 'Разрешить HDR'),
