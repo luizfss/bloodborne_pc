@@ -194,7 +194,9 @@ bool g_window_ready;
 
 u32 BbDisplayRefreshHz() {
     static const u32 hz = [] {
-        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+        // The display the game window opened on (BB_DISPLAY), which may not be the primary one.
+        const SDL_DisplayID display = g_window && g_window->GetDisplay() ? g_window->GetDisplay() : SDL_GetPrimaryDisplay();
+        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);
         const u32 rate = mode && mode->refresh_rate > 0 ? u32(mode->refresh_rate + 0.5f) : 60;
         std::printf("GPU: vblank follows the display refresh rate, %u Hz\n", rate);
         return std::max<u32>(rate, 60);
